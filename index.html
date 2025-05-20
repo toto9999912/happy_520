@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>煙火展示</title>
+    <style>
+        @font-face {
+            font-family: 'CJKFont';
+            src: url('./CEFFontsCJK-Regular.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            cursor: pointer;
+            user-select: none;
+            font-family: Arial, sans-serif;
+        }
+        
+        canvas {
+            display: block;
+        }
+        
+        .message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 2.5rem;
+            opacity: 0;
+            text-align: center;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+            transition: opacity 0.5s;
+            font-family: 'CJKFont', Arial, sans-serif;
+        }
+        
+        .countdown {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 5rem;
+            opacity: 0;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+            font-family: 'CJKFont', Arial, sans-serif;
+        }
+
+        .final-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: gold;
+            font-size: 3rem;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 1s;
+            text-shadow: 0 0 15px rgba(255, 215, 0, 0.8);
+            line-height: 1.5;
+            font-family: 'CJKFont', Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="fireworks"></canvas>
+    <div id="countdown" class="countdown"></div>
+    <div id="message" class="message"></div>
+    <div id="finalMessage" class="final-message">祝夜 & 非雨　520快樂<br>願你們長長久久</div>
+
+    <script>
+        const canvas = document.getElementById('fireworks');
+        const ctx = canvas.getContext('2d');
+        const countdownElement = document.getElementById('countdown');
+        const messageElement = document.getElementById('message');
+        const finalMessageElement = document.getElementById('finalMessage');
+        
+        let width, height;
+        let particles = [];
+        let fireworks = [];
+        let isInitialFireworksOver = false;
+        let clickEnabled = false;
+        
+        // 設置畫布大小
+        function resizeCanvas() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        
+        // 煙火粒子
+        class Particle {
+            constructor(x, y, color, velocity, radius = 2, decay = 0.015) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.velocity = velocity;
+                this.radius = radius;
+                this.alpha = 1;
+                this.decay = decay;
+                this.initialRadius = radius; // 記錄初始半徑
+            }
+            
+            update() {
+                this.velocity.x *= 0.99;
+                this.velocity.y *= 0.99;
+                this.velocity.y += 0.02;
+                
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+                
+                this.alpha -= this.decay;
+                
+                // 隨著alpha減小，粒子半徑也可以略微縮小，使消散更自然
+                if (this.initialRadius > 3) { // 只對較大的粒子應用這個效果
+                    this.radius = Math.max(0.5, this.initialRadius * (0.2 + this.alpha * 0.8));
+                }
+            }
+            
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 為白色粒子添加發光效果
+                if (this.color.includes('255, 255, 255') || this.color.includes('240, 240, 255')) {
+                    ctx.globalAlpha = this.alpha * 0.5;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = 'white';
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius * 1.2, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // 清除陰影，避免影響其他繪圖
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.restore();
+            }
+        }
+        
+        // 煙火主體
+        class Firework {
+            constructor(x, y, targetX, targetY, color, particles = 100, size = 'medium') {
+                this.x = x;
+                this.y = y;
+                this.targetX = targetX;
+                this.targetY = targetY;
+                this.color = color;
+                this.particles = particles;
+                this.size = size;
+                
+                this.velocity = {
+                    x: (targetX - x) / 100,
+                    y: (targetY - y) / 100 - 1.5
+                };
+                
+                this.isExploded = false;
+                this.alpha = 1;
+            }
+            
+            update() {
+                if (!this.isExploded) {
+                    this.x += this.velocity.x;
+                    this.y += this.velocity.y;
+                    this.velocity.y += 0.05;
+                    
+                    // 檢查是否到達頂點或接近目標位置
+                    if (this.velocity.y >= 0 || (Math.abs(this.x - this.targetX) < 5 && Math.abs(this.y - this.targetY) < 5)) {
+                        this.explode();
+                    }
+                }
+            }
+            
+            draw() {
+                if (!this.isExploded) {
+                    ctx.save();
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // 尾跡效果
+                    ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 1, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    ctx.restore();
+                }
+            }
+            
+            explode() {
+                this.isExploded = true;
+                
+                let particleCount = this.particles;
+                let particleRadius = 2;
+                let decay = 0.015;
+                
+                // 根據大小設置不同的參數
+                if (this.size === 'small') {
+                    particleCount = Math.floor(this.particles * 0.6);
+                    particleRadius = 1.5;
+                    decay = 0.02;
+                } else if (this.size === 'large') {
+                    particleCount = Math.floor(this.particles * 1.5);
+                    particleRadius = 3;
+                    decay = 0.01;
+                } else if (this.size === 'huge') {
+                    particleCount = Math.floor(this.particles * 2.5);
+                    particleRadius = 4;  // 更大的粒子
+                    decay = 0.008;
+                } else if (this.size === 'huge-white') {
+                    particleCount = Math.floor(this.particles * 3);
+                    particleRadius = 5;  // 更大的粒子
+                    decay = 0.004;  // 非常慢的消散
+                }
+                
+                // 創建爆炸粒子
+                for (let i = 0; i < particleCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = Math.random() * (this.size === 'huge-white' ? 8 : 5) + 2;
+                    
+                    // 為大型白色煙火增加更多速度變化與擴散範圍
+                    const actualSpeed = this.size === 'huge-white' ? 
+                        speed * (1 + Math.random() * 0.8) : 
+                        (this.size === 'huge' ? speed * (1 + Math.random() * 0.5) : speed);
+                    
+                    // 為大型白色煙火創建帶有發光效果的顏色
+                    let particleColor = this.color;
+                    if (this.size === 'huge-white') {
+                        // 添加一些淡藍色和白色的變化，營造出發光效果
+                        const rand = Math.random();
+                        if (rand > 0.7) {
+                            particleColor = 'rgba(200, 230, 255, 0.9)'; // 淡藍白色
+                        } else if (rand > 0.3) {
+                            particleColor = 'rgba(255, 255, 255, 0.95)'; // 純白色
+                        } else {
+                            particleColor = 'rgba(240, 240, 255, 0.9)'; // 略帶藍的白色
+                        }
+                    }
+                    
+                    particles.push(new Particle(
+                        this.x,
+                        this.y,
+                        particleColor,
+                        {
+                            x: Math.cos(angle) * actualSpeed,
+                            y: Math.sin(angle) * actualSpeed
+                        },
+                        particleRadius,
+                        decay
+                    ));
+                }
+                
+                // 如果是大型白色煙火，添加額外的發光效果粒子
+                if (this.size === 'huge-white') {
+                    // 添加一些更小但更亮的粒子，創造閃爍發光的效果
+                    for (let i = 0; i < particleCount * 0.5; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const speed = Math.random() * 10 + 3; // 更快的速度
+                        
+                        particles.push(new Particle(
+                            this.x,
+                            this.y,
+                            'rgba(255, 255, 255, 0.9)',
+                            {
+                                x: Math.cos(angle) * speed,
+                                y: Math.sin(angle) * speed
+                            },
+                            Math.random() * 2 + 0.5, // 更小的粒子
+                            0.02 // 更快的消散
+                        ));
+                    }
+                }
+            }
+        }
+        
+        // 文字煙火效果
+        function createTextFirework(text, fontSize = 60) {
+            const textX = width / 2;
+            const textY = height / 2;
+            
+            // 創建臨時畫布繪製文字
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            tempCanvas.width = width;
+            tempCanvas.height = height;
+            
+            tempCtx.font = `bold ${fontSize}px Arial`;
+            tempCtx.fillStyle = 'white';
+            tempCtx.textAlign = 'center';
+            tempCtx.textBaseline = 'middle';
+            tempCtx.fillText(text, textX, textY);
+            
+            // 獲取文字像素資料
+            const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const data = imageData.data;
+            
+            // 從文字像素創建粒子
+            const textParticles = [];
+            const step = 4; // 減少粒子數量，提高效能
+            
+            for (let y = 0; y < tempCanvas.height; y += step) {
+                for (let x = 0; x < tempCanvas.width; x += step) {
+                    const index = (y * tempCanvas.width + x) * 4;
+                    const alpha = data[index + 3];
+                    
+                    if (alpha > 0) {
+                        // 隨機顏色
+                        const colors = ['#FFD700', '#FF6347', '#00BFFF', '#FF69B4', '#7CFC00'];
+                        const color = colors[Math.floor(Math.random() * colors.length)];
+                        
+                        // 添加粒子
+                        textParticles.push(new Particle(
+                            x,
+                            y,
+                            color,
+                            { x: 0, y: 0 },
+                            Math.random() * 1.5 + 1.5,
+                            0.005
+                        ));
+                    }
+                }
+            }
+            
+            return textParticles;
+        }
+        
+        // 生成隨機顏色
+        function getRandomColor() {
+            const colors = [
+                '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', 
+                '#FFA500', '#800080', '#FFC0CB', '#00FA9A', '#FFD700', '#FF6347'
+            ];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+        
+        // 創建煙火
+        function createFirework(size = 'medium') {
+            const x = Math.random() * width;
+            const y = height;
+            const targetX = Math.random() * width;
+            const targetY = Math.random() * (height * 0.5) + height * 0.1;
+            
+            fireworks.push(new Firework(x, y, targetX, targetY, getRandomColor(), 100, size));
+        }
+        
+        // 初始煙火展示
+        function initialFireworks() {
+            // 設置初始煙火展示的時間軸
+            setTimeout(() => {
+                // 4秒內發放多個煙火
+                const sizes = ['small', 'medium', 'large'];
+                const interval = setInterval(() => {
+                    for (let i = 0; i < 2; i++) {
+                        const size = sizes[Math.floor(Math.random() * sizes.length)];
+                        createFirework(size);
+                    }
+                }, 300);
+                
+                // 4秒後停止發放煙火
+                setTimeout(() => {
+                    clearInterval(interval);
+                    // 等待粒子消失
+                    setTimeout(() => {
+                        isInitialFireworksOver = true;
+                        startCountdown();
+                    }, 1000);
+                }, 4000);
+            }, 2000); // 前2秒停頓
+        }
+        
+        // 倒數計時
+        function startCountdown() {
+            let count = 3;
+            
+            const countdown = setInterval(() => {
+                countdownElement.style.opacity = 1;
+                countdownElement.textContent = count;
+                
+                setTimeout(() => {
+                    countdownElement.style.opacity = 0;
+                }, 800);
+                
+                count--;
+                
+                if (count < -1) {
+                    clearInterval(countdown);
+                    // 確保0完全消失後才開始顯示訊息
+                    setTimeout(() => {
+                        startMessages();
+                    }, 800);
+                }
+            }, 1000);
+        }
+        
+        // 顯示提示消息
+        function startMessages() {
+            const messages = ["哦哦哦哦哦哦哦", "齁齁？非雨你以為這樣就結束了嗎？", "才沒有這麼簡單呢！點下去"];
+            let messageIndex = 0;
+            
+        const showMessage = () => {
+        if (messageIndex < messages.length) {
+            messageElement.textContent = messages[messageIndex];
+            messageElement.style.opacity = 1;
+            
+            messageIndex++;
+            
+            // 如果不是最後一條消息，設置淡出
+            if (messageIndex < messages.length) {
+                setTimeout(() => {
+                    messageElement.style.opacity = 0;
+                    setTimeout(showMessage, 500);
+                }, 2000); // 從1000改為2000，讓消息顯示2秒
+            } else {
+                // 最後一條消息保持顯示，直到點擊
+                clickEnabled = true;
+                document.body.style.cursor = 'pointer';
+            }
+        }
+    };
+            
+            showMessage();
+        }
+        
+        // 最終煙火展示
+        function finalFireworkShow() {
+            // 清空現有煙火和粒子
+            fireworks = [];
+            particles = [];
+            
+            // 只創建一個巨大的中央白色煙火
+            const centerX = width / 2;
+            const centerY = height / 2;
+            
+            // 一個巨大的中央煙火 - 白色發光
+            const mainFirework = new Firework(
+                centerX,
+                height,
+                centerX,
+                centerY * 0.6,  // 稍微高一點的位置
+                '#FFFFFF',  // 純白色
+                500,  // 更多粒子
+                'huge-white'  // 特殊尺寸標識
+            );
+            
+            fireworks.push(mainFirework);
+            
+            // 顯示最終消息
+            setTimeout(() => {
+                finalMessageElement.style.opacity = 1;
+            }, 1500);  // 延遲顯示，讓煙火效果更明顯
+        }
+        
+        // 動畫循環
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 清空畫布 - 減少透明度使煙火尾跡更持久
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, width, height);
+            
+            // 更新和繪製煙火
+            fireworks.forEach((firework, index) => {
+                firework.update();
+                firework.draw();
+                
+                if (firework.isExploded) {
+                    fireworks.splice(index, 1);
+                }
+            });
+            
+            // 更新和繪製粒子
+            particles.forEach((particle, index) => {
+                particle.update();
+                particle.draw();
+                
+                if (particle.alpha <= 0) {
+                    particles.splice(index, 1);
+                }
+            });
+        }
+        
+        // 點擊事件
+        document.body.addEventListener('click', () => {
+            if (clickEnabled) {
+                clickEnabled = false;
+                // 先隱藏提示文字
+                messageElement.style.opacity = 0;
+                // 觸發最終煙火
+                finalFireworkShow();
+                console.log("點擊觸發: 最終煙火展示啟動");
+            }
+        });
+        
+        // 開始動畫和初始煙火展示
+        animate();
+        initialFireworks();
+    </script>
+</body>
+</html>
